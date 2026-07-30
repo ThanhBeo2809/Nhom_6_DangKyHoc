@@ -1,0 +1,12 @@
+node_modules
+backend/node_modules
+backend/database.sqlite
+.env
+.git
+.github
+*.docx
+*.md
+check_*.js
+test_*.js
+reset_*.js
+seed_*.js
