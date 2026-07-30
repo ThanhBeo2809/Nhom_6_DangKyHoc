@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ĐĂNG KÝ HỌC - Hệ thống Quản lý Đào tạo & Đăng ký Tín chỉ</title>
+  <!-- Google Fonts Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Vanilla CSS Style -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ================= AUTH CONTAINER (MÀN HÌNH ĐĂNG NHẬP) ================= -->
+  <div id="auth-container" class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="logo-icon"><i class="fa-solid fa-graduation-cap"></i></div>
+        <h1>ĐĂNG KÝ HỌC</h1>
+        <p>Hệ thống Quản lý Đào tạo & Đăng ký Tín chỉ</p>
+      </div>
+      
+      <form id="login-form">
+        <div class="input-group">
+          <label for="username"><i class="fa-regular fa-user"></i> Tài khoản</label>
+          <input type="text" id="username" placeholder="Tên đăng nhập (ví dụ: 24100001@pka.edu.vn)" required>
+        </div>
+        <div class="input-group">
+          <label for="password"><i class="fa-regular fa-key"></i> Mật khẩu</label>
+          <input type="password" id="password" placeholder="Mật khẩu" required>
+        </div>
+        <div class="auth-extra-links">
+          <a href="#" onclick="openForgotPasswordModal(event)" class="forgot-password-link"><i class="fa-solid fa-key"></i> Quên mật khẩu?</a>
+        </div>
+        <button type="submit" class="btn-primary">Đăng Nhập <i class="fa-solid fa-arrow-right-to-bracket"></i></button>
+      </form>
+
+
+    </div>
+  </div>
+
+  <!-- ================= APP CONTAINER (MÀN HÌNH DASHBOARD) ================= -->
+  <div id="app-container" class="dashboard-wrapper hidden">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <i class="fa-solid fa-graduation-cap"></i>
+        <span>ĐĂNG KÝ HỌC</span>
+      </div>
+      
+      <!-- Lớp menu động tuỳ theo Role -->
+      <nav class="sidebar-nav" id="sidebar-nav">
+        <!-- JS render tabs here -->
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn-logout"><i class="fa-solid fa-right-from-bracket"></i> Đăng xuất</button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Topbar Header -->
+      <header class="topbar">
+        <div class="topbar-title">
+          <h2 id="page-title">Tổng quan</h2>
+        </div>
+        <div class="user-profile-badge">
+          <div class="avatar-placeholder"><i class="fa-solid fa-user"></i></div>
+          <div class="user-info">
+            <span class="user-name" id="user-display-name">Sinh viên</span>
+            <span class="user-role" id="user-display-role">Student</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Dynamic Page Views Container -->
+      <div class="page-view-container" id="page-view-content">
+        <!-- JS render page content here -->
+      </div>
+    </main>
+  </div>
+
+  <!-- ================= PAYMENT QR MODAL (MÃ QR ĐÓNG HỌC PHÍ) ================= -->
+  <div id="payment-modal" class="modal-wrapper hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-qrcode text-gradient"></i> Thanh toán học phí qua mã QR (SePay)</h2>
+        <button onclick="closePaymentModal()" class="btn-close-modal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body text-center">
+        <p>Quét mã QR bằng App Ngân hàng bất kỳ để thanh toán học phí:</p>
+        <div class="qr-code-box">
+          <img id="vietqr-img" src="" alt="Mã QR thanh toán VietQR">
+          <div class="qr-glow"></div>
+        </div>
+        <div class="payment-info-box">
+          <p><strong>Số tiền:</strong> <span id="pay-modal-amount" class="text-gradient" style="font-size:1.2rem; font-weight:700;">0 VNĐ</span></p>
+          <p><strong>Nội dung CK:</strong> <span id="pay-modal-ref" style="color:var(--color-warning); font-weight:bold; letter-spacing:1px;">PKABILL</span></p>
+        </div>
+        <div style="margin-top:15px; padding:15px; background:rgba(99,179,237,0.08); border:1px solid rgba(99,179,237,0.25); border-radius:12px; font-size:0.9rem; color:var(--text-secondary); display:flex; align-items:center; justify-content:center; gap:10px;">
+          <i class="fa-solid fa-arrows-rotate fa-spin" style="color:var(--color-primary); font-size:1.4rem;"></i>
+          <div style="text-align:left;">
+            <strong style="color:var(--color-primary); display:block;">Hệ thống đang chờ giao dịch...</strong>
+            <span>Sau khi tiền về tài khoản, màn hình sẽ <strong>tự động hoàn tất</strong> mà không cần thao tác thêm.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ================= FORGOT PASSWORD MODAL (QUÊN MẬT KHẨU) ================= -->
+  <div id="forgot-modal" class="modal-wrapper hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-shield-halved text-gradient"></i> Khôi phục mật khẩu</h2>
+        <button onclick="closeForgotPasswordModal()" class="btn-close-modal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <!-- Step Indicator -->
+      <div class="step-indicator">
+        <div id="step1-dot" class="step-item active">1. Gửi mã OTP</div>
+        <div id="step2-dot" class="step-item">2. Đặt lại mật khẩu</div>
+      </div>
+
+      <!-- Step 1: Nhập Username / Mã sinh viên -->
+      <div id="forgot-step-1" class="modal-body">
+        <p style="color:var(--text-secondary); margin-bottom:15px; font-size:0.9rem;">
+          Nhập Tên tài khoản hoặc Mã sinh viên/giảng viên của bạn. Hệ thống sẽ tự động tra cứu email đăng ký trong hồ sơ và gửi mã xác thực OTP 6 số.
+        </p>
+        <form id="forgot-form-step1" onsubmit="handleRequestOTP(event)">
+          <div class="input-group">
+            <label for="forgot-username"><i class="fa-regular fa-user"></i> Tài khoản / MSV / MGV</label>
+            <input type="text" id="forgot-username" placeholder="Ví dụ: 24100001 hoặc 24100001@pka.edu.vn" required>
+          </div>
+          <button type="submit" id="btn-send-otp" class="btn-primary w-100" style="margin-top:10px;">
+            Gửi mã xác thực OTP <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </form>
+      </div>
+
+      <!-- Step 2: Nhập OTP & Đặt mật khẩu mới -->
+      <div id="forgot-step-2" class="modal-body hidden">
+        <div id="otp-sent-info" class="alert-info-box" style="margin-bottom:15px;">
+          <p><i class="fa-solid fa-envelope-circle-check" style="color:var(--color-primary)"></i> OTP đã tự động gửi đến: <strong id="forgot-target-email" style="color:var(--text-primary)">email@pka.edu.vn</strong></p>
+          <div id="demo-otp-badge" class="demo-otp-badge">
+            <span><i class="fa-solid fa-circle-info"></i> Mã OTP kiểm thử demo: <strong id="demo-otp-val" style="color:var(--color-warning); font-size:1.1rem; letter-spacing:2px;">123456</strong></span>
+          </div>
+        </div>
+
+        <form id="forgot-form-step2" onsubmit="handleResetPassword(event)">
+          <div class="input-group">
+            <label for="forgot-otp"><i class="fa-solid fa-shield-cat"></i> Mã OTP (6 chữ số)</label>
+            <input type="text" id="forgot-otp" placeholder="123456" maxlength="6" required style="letter-spacing:4px; font-weight:700; text-align:center; font-size:1.1rem;">
+          </div>
+          <div class="input-group">
+            <label for="forgot-new-pass"><i class="fa-solid fa-lock"></i> Mật khẩu mới</label>
+            <input type="password" id="forgot-new-pass" placeholder="Nhập mật khẩu mới" required>
+          </div>
+          <div class="input-group">
+            <label for="forgot-confirm-pass"><i class="fa-solid fa-lock"></i> Xác nhận mật khẩu mới</label>
+            <input type="password" id="forgot-confirm-pass" placeholder="Nhập lại mật khẩu mới" required>
+          </div>
+          <div style="display:flex; gap:10px; margin-top:15px;">
+            <button type="button" onclick="backToStep1()" class="btn-secondary" style="flex:1;"><i class="fa-solid fa-arrow-left"></i> Quay lại</button>
+            <button type="submit" id="btn-reset-pass" class="btn-primary" style="flex:2;">Đặt lại mật khẩu <i class="fa-solid fa-check"></i></button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= EDIT PROFILE MODAL (SỬA HỒ SƠ SINH VIÊN / GIẢNG VIÊN) ================= -->
+  <div id="edit-profile-modal" class="modal-wrapper hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-user-pen text-gradient"></i> Chỉnh sửa hồ sơ <span id="edit-profile-title-role"></span></h2>
+        <button onclick="closeEditProfileModal()" class="btn-close-modal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <form id="edit-profile-form" onsubmit="handleSaveProfileEdit(event)">
+          <input type="hidden" id="edit-profile-role">
+          <input type="hidden" id="edit-profile-id">
+
+          <div class="form-row">
+            <div class="input-group">
+              <label for="edit-profile-name">Họ và tên</label>
+              <input type="text" id="edit-profile-name" required>
+            </div>
+            <div class="input-group">
+              <label for="edit-profile-gender">Giới tính</label>
+              <select id="edit-profile-gender">
+                <option value="Nam">Nam</option>
+                <option value="Nữ">Nữ</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="input-group">
+              <label for="edit-profile-dob">Ngày sinh</label>
+              <input type="date" id="edit-profile-dob" required>
+            </div>
+            <div class="input-group" id="edit-group-email">
+              <label for="edit-profile-email">Email liên hệ</label>
+              <input type="email" id="edit-profile-email">
+            </div>
+          </div>
+
+          <!-- Các trường dành riêng cho Sinh viên -->
+          <div id="edit-student-fields" class="form-row">
+            <div class="input-group">
+              <label for="edit-profile-class">Lớp sinh hoạt</label>
+              <input type="text" id="edit-profile-class">
+            </div>
+            <div class="input-group">
+              <label for="edit-profile-major">Ngành học</label>
+              <select id="edit-profile-major">
+                <option value="cntt">Công nghệ thông tin</option>
+                <option value="attt">An toàn thông tin</option>
+                <option value="hthong_tt">Hệ thống thông tin</option>
+                <option value="kdqt">Kinh doanh quốc tế</option>
+                <option value="logistics">Logistics và Quản lý chuỗi cung ứng</option>
+                <option value="tmdt">Thương mại điện tử</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Các trường dành riêng cho Giảng viên -->
+          <div id="edit-lecturer-fields" class="form-row hidden">
+            <div class="input-group">
+              <label for="edit-profile-dept">Khoa trực thuộc</label>
+              <select id="edit-profile-dept">
+                <option value="CNTT">Khoa Công nghệ thông tin</option>
+                <option value="KT">Khoa Kinh tế và Kinh doanh quốc tế</option>
+              </select>
+            </div>
+            <div class="input-group">
+              <label for="edit-profile-pos">Chức danh</label>
+              <input type="text" id="edit-profile-pos">
+            </div>
+            <div class="input-group">
+              <label for="edit-profile-subject">Môn giảng dạy chính</label>
+              <input type="text" id="edit-profile-subject">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:10px; margin-top:20px;">
+            <button type="button" onclick="closeEditProfileModal()" class="btn-secondary" style="flex:1;">Hủy</button>
+            <button type="submit" class="btn-primary" style="flex:2;"><i class="fa-solid fa-save"></i> Lưu cập nhật</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= EDIT STUDENT EMAIL MODAL (CẬP NHẬT EMAIL SINH VIÊN) ================= -->
+  <div id="edit-student-email-modal" class="modal-wrapper hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-envelope-circle-check text-gradient"></i> Cập nhật Email liên hệ</h2>
+        <button onclick="closeEditStudentEmailModal()" class="btn-close-modal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <form id="edit-student-email-form" onsubmit="handleSaveStudentEmail(event)">
+          <div class="input-group">
+            <label for="edit-student-email-input"><i class="fa-regular fa-envelope"></i> Email mới</label>
+            <input type="email" id="edit-student-email-input" placeholder="Ví dụ: email_moi@pka.edu.vn" required>
+          </div>
+          <div style="display:flex; gap:10px; margin-top:20px;">
+            <button type="button" onclick="closeEditStudentEmailModal()" class="btn-secondary" style="flex:1;">Hủy</button>
+            <button type="submit" class="btn-primary" style="flex:2;"><i class="fa-solid fa-save"></i> Lưu Email mới</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Socket.IO Client (real-time payment detection) -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Vanilla Javascript Controller -->
+  <script src="app.js"></script>
+</body>
+</html>
