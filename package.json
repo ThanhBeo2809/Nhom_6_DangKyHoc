@@ -1,0 +1,21 @@
+{
+  "name": "pka-portal",
+  "version": "1.0.0",
+  "description": "Academic Management and Course Registration System",
+  "main": "backend/server.js",
+  "scripts": {
+    "install-all": "cd backend && npm install",
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js",
+    "test": "npm --prefix backend test",
+    "check": "npm --prefix backend run check",
+    "seed:academic-results": "npm --prefix backend run seed:academic-results",
+    "verify:academic-results": "npm --prefix backend run verify:academic-results"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "docx": "^9.7.1"
+  }
+}
