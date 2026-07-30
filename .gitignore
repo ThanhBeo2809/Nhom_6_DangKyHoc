@@ -24,3 +24,11 @@ npm-debug.log*
 
 # Generated payment QR
 frontend/sepay_qr.png
+
+# Local diagnostic and destructive scripts
+check_*.js
+test_*.js
+reset_*.js
+seed_*.js
+run_seed.js
+start-webhook-tunnel.bat
