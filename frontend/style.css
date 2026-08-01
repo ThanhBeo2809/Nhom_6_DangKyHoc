@@ -1061,6 +1061,25 @@ body {
   margin-bottom: 0;
 }
 
+.lecturer-schedule-card .schedule-card-header-amber {
+  padding: 6px 8px;
+}
+
+.lecturer-schedule-card .schedule-card-title {
+  font-size: 0.78rem;
+  line-height: 1.15;
+}
+
+.lecturer-schedule-card .schedule-card-time {
+  font-size: 0.68rem;
+}
+
+.lecturer-schedule-card .schedule-card-body {
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
 /* Mini Calendar Widget */
 .mini-calendar-widget {
   width: 300px;

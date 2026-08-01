@@ -678,6 +678,7 @@ router.get('/schedule', async (req, res) => {
       credits: r.Class.Course.credits,
       lecturerName: r.Class.Lecturer.name,
       roomName: r.Class.roomName,
+      roomType: r.Class.roomType,
       dayOfWeek: r.Class.dayOfWeek,
       shift: r.Class.shift,
       startSlot: r.Class.startSlot,

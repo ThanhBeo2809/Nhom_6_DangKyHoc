@@ -844,89 +844,8 @@ async function renderTabContent(tabId, container) {
   }
 
   else if (tabId === 'lecturer-schedule') {
-    const res = await fetch(`${API_BASE}/lecturer/schedule`, { headers });
-    const schedules = await res.json();
-
-    const days = [2, 3, 4, 5, 6, 7];
-    const shifts = ['morning', 'afternoon'];
-
-    let gridHTML = `
-      <div class="glass-card">
-        <h3 class="card-title">Thời khóa biểu lịch giảng dạy trong tuần - ${escapeHtml(currentSemesterName())} <i class="fa-solid fa-calendar-days"></i></h3>
-        <div class="schedule-grid" style="margin-top:20px;">
-          <div class="grid-header">Ca Học</div>
-          <div class="grid-header">Thứ 2</div>
-          <div class="grid-header">Thứ 3</div>
-          <div class="grid-header">Thứ 4</div>
-          <div class="grid-header">Thứ 5</div>
-          <div class="grid-header">Thứ 6</div>
-          <div class="grid-header">Thứ 7</div>
-    `;
-
-    shifts.forEach(shift => {
-      const shiftName = shift === 'morning' ? 'Sáng<br><small>(6:45 - 12:10)</small>' : 'Chiều<br><small>(13:00 - 18:25)</small>';
-      gridHTML += `<div class="grid-cell time-column">${shiftName}</div>`;
-
-      days.forEach(day => {
-        const matchedClasses = schedules.filter(c => c.dayOfWeek === day && c.shift === shift);
-        
-        gridHTML += `<div class="grid-cell">`;
-        matchedClasses.forEach(c => {
-          gridHTML += `
-            <div class="schedule-card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(6, 182, 212, 0.2) 100%); border-color: rgba(16, 185, 129, 0.4);">
-              <div class="schedule-title">${c.courseName} (${c.classId})</div>
-              <div class="schedule-details">
-                <i class="fa-solid fa-location-dot"></i> Phòng: ${c.roomName} (${c.roomType === 'lab' ? 'Lab máy' : 'Lý thuyết'})<br>
-                <i class="fa-solid fa-users"></i> Sĩ số: ${c.enrolledCount}/${c.capacity}<br>
-                <i class="fa-solid fa-clock"></i> Tiết: ${c.startSlot}-${c.startSlot + c.numSlots - 1}
-              </div>
-            </div>
-          `;
-        });
-        gridHTML += `</div>`;
-      });
-    });
-
-    gridHTML += `
-        </div>
-      </div>
-
-      <div class="glass-card" style="margin-top:25px;">
-        <h3 class="card-title">Chi tiết lịch giảng dạy học kỳ <i class="fa-solid fa-list"></i></h3>
-        <div class="table-responsive" style="margin-top:15px;">
-          <table class="glass-table">
-            <thead>
-              <tr>
-                <th>Mã Lớp HP</th>
-                <th>Tên Môn Học</th>
-                <th>Số TC</th>
-                <th>Phòng Học</th>
-                <th>Thứ & Ca Học</th>
-                <th>Tiết Học</th>
-                <th>Sĩ Số Lớp</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${schedules.map(c => `
-                <tr>
-                  <td><strong>${c.classId}</strong></td>
-                  <td>${c.courseName}</td>
-                  <td>${c.credits} TC</td>
-                  <td>${c.roomName} (${c.roomType === 'lab' ? 'Thực hành' : 'Lý thuyết'})</td>
-                  <td>Thứ ${c.dayOfWeek} (${c.shift === 'morning' ? 'Ca Sáng' : 'Ca Chiều'})</td>
-                  <td>Tiết ${c.startSlot} - ${c.startSlot + c.numSlots - 1}</td>
-                  <td>${c.enrolledCount} / ${c.capacity}</td>
-                </tr>
-              `).join('') || '<tr><td colspan="7" class="text-center">Chưa có lịch dạy trong kỳ.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-
-    container.innerHTML = gridHTML;
+    await renderLecturerScheduleTab(container);
   }
-
   else if (tabId === 'lecturer-classes') {
     // Danh sách lớp giảng dạy
     const res = await fetch(`${API_BASE}/lecturer/classes`, { headers });
@@ -3771,11 +3690,16 @@ function getClassTimeRange(schedule) {
   };
 }
 
-async function renderStudentScheduleTab(container) {
+async function renderStudentScheduleTab(container, scheduleMode = 'student') {
   try {
+    const isLecturerSchedule = scheduleMode === 'lecturer';
     const headers = getAuthHeaders();
-    const res = await fetch(`${API_BASE}/student/schedule`, { headers });
+    const res = await fetch(`${API_BASE}/${isLecturerSchedule ? 'lecturer' : 'student'}/schedule`, { headers });
     const schedules = await res.json();
+
+    if (!res.ok || !Array.isArray(schedules)) {
+      throw new Error(schedules?.message || 'Không thể tải dữ liệu thời khóa biểu.');
+    }
 
     const termRange = getScheduleTermRange();
     const selectedDate = new Date(window.selectedScheduleDate || new Date());
@@ -3870,18 +3794,27 @@ async function renderStudentScheduleTab(container) {
       const topOffset = (offsetWithinHour / 60) * gridHourHeight;
       const cardHeight = (durationMinutes / 60) * gridHourHeight;
       const slotsStr = `Tiết ${c.startSlot}-${Number(c.startSlot) + Number(c.numSlots) - 1}`;
+      const scheduleOwnerDetail = isLecturerSchedule
+        ? ''
+        : `<p><i class="fa-solid fa-user-tie" style="color:#4f46e5;"></i> ${escapeHtml(c.lecturerName || 'Chưa phân công')}</p>`;
+      const scheduleLocationDetail = isLecturerSchedule
+        ? `<p><i class="fa-solid fa-location-dot" style="color:#d97706;"></i> ${escapeHtml(c.roomName)} · ${Number(c.enrolledCount) || 0}/${Number(c.capacity) || 0} SV</p>`
+        : `<p><i class="fa-solid fa-location-dot" style="color:#d97706;"></i> Có mặt ${escapeHtml(c.roomName)} (${c.roomType === 'lab' ? 'PC' : 'LT'})</p>`;
+      const scheduleClassLabel = isLecturerSchedule
+        ? `${escapeHtml(c.classId)} · ${escapeHtml(c.courseName)}`
+        : `${escapeHtml(c.courseName)}-${c.dayOfWeek}-${c.startSlot}-25(${escapeHtml(c.classId)})`;
 
       scheduleCardsHTML += `
-        <div class="schedule-card-item schedule-card-positioned"
+        <div class="schedule-card-item schedule-card-positioned ${isLecturerSchedule ? 'lecturer-schedule-card' : ''}"
              style="grid-column:${dayIndex + 2}; grid-row:${gridRow} / span ${coveredRows}; margin-top:${topOffset}px; height:${cardHeight}px;">
           <div class="schedule-card-header-amber">
             <div class="schedule-card-title">${escapeHtml(c.courseName)}</div>
             <div class="schedule-card-time">${timeRange.startTime} - ${timeRange.endTime} (${slotsStr})</div>
           </div>
           <div class="schedule-card-body">
-            <p style="font-weight:600; color:#1e293b;">${escapeHtml(c.courseName)}-${c.dayOfWeek}-${c.startSlot}-25(${escapeHtml(c.classId)})</p>
-            <p><i class="fa-solid fa-location-dot" style="color:#d97706;"></i> Có mặt ${escapeHtml(c.roomName)} (${c.roomType === 'lab' ? 'PC' : 'LT'})</p>
-            <p><i class="fa-solid fa-user-tie" style="color:#4f46e5;"></i> ${escapeHtml(c.lecturerName)}</p>
+            <p style="font-weight:600; color:#1e293b;">${scheduleClassLabel}</p>
+            ${scheduleLocationDetail}
+            ${scheduleOwnerDetail}
           </div>
         </div>
       `;
@@ -3910,7 +3843,7 @@ async function renderStudentScheduleTab(container) {
     for (let p = startWeekday - 1; p >= 0; p--) {
       const dNum = prevMonthLastDay - p;
       daysGridHTML += `
-        <div class="mini-cal-day-cell other-month" onclick="selectScheduleCalendarDate(${prevYear}, ${prevMonth}, ${dNum})">
+        <div class="mini-cal-day-cell other-month" onclick="selectScheduleCalendarDate(${prevYear}, ${prevMonth}, ${dNum}, '${scheduleMode}')">
           ${dNum}
         </div>
       `;
@@ -3921,7 +3854,7 @@ async function renderStudentScheduleTab(container) {
       const isSelected = dayNum === selectedDate.getDate() && calMonth === selectedDate.getMonth() && calYear === selectedDate.getFullYear();
       const activeClass = isSelected ? 'active' : '';
       daysGridHTML += `
-        <div class="mini-cal-day-cell ${activeClass}" onclick="selectScheduleCalendarDate(${calYear}, ${calMonth}, ${dayNum})">
+        <div class="mini-cal-day-cell ${activeClass}" onclick="selectScheduleCalendarDate(${calYear}, ${calMonth}, ${dayNum}, '${scheduleMode}')">
           ${dayNum}
         </div>
       `;
@@ -3938,7 +3871,7 @@ async function renderStudentScheduleTab(container) {
 
     for (let n = 1; n <= nextMonthDaysCount; n++) {
       daysGridHTML += `
-        <div class="mini-cal-day-cell other-month" onclick="selectScheduleCalendarDate(${nextYear}, ${nextMonth}, ${n})">
+        <div class="mini-cal-day-cell other-month" onclick="selectScheduleCalendarDate(${nextYear}, ${nextMonth}, ${n}, '${scheduleMode}')">
           ${n}
         </div>
       `;
@@ -3951,7 +3884,7 @@ async function renderStudentScheduleTab(container) {
 
     container.innerHTML = `
       <div class="schedule-breadcrumb" style="display:flex; justify-content:space-between; align-items:center;">
-        <div>Thời khóa biểu &gt; <span>Lịch học</span></div>
+        <div>Thời khóa biểu &gt; <span>${isLecturerSchedule ? 'Lịch giảng dạy' : 'Lịch học'}</span></div>
         <div style="font-size:0.85rem; color:var(--text-secondary);"><i class="fa-solid fa-calendar-day"></i> ${currentWeekRangeStr}</div>
       </div>
 
@@ -3959,12 +3892,12 @@ async function renderStudentScheduleTab(container) {
         <!-- CỘT TRÁI: LỊCH CÁ NHÂN KHUNG GIỜ VN -->
         <div class="schedule-main-card glass-card">
           <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-            <span><i class="fa-solid fa-calendar-week"></i> Lịch cá nhân</span>
-            <button class="btn-sm btn-secondary" onclick="resetScheduleToToday()"><i class="fa-solid fa-rotate-left"></i> Hôm nay</button>
+            <span><i class="fa-solid fa-calendar-week"></i> ${isLecturerSchedule ? 'Lịch giảng dạy' : 'Lịch cá nhân'}</span>
+            <button class="btn-sm btn-secondary" onclick="resetScheduleToToday('${scheduleMode}')"><i class="fa-solid fa-rotate-left"></i> Hôm nay</button>
           </div>
           <div class="schedule-term-range">
             <i class="fa-solid fa-calendar-check"></i>
-            ${escapeHtml(currentSemesterName())}: ${escapeHtml(termRangeText)}. Lịch tháng vẫn xem được cả năm; môn học chỉ hiện trong thời gian học kỳ.
+            ${escapeHtml(currentSemesterName())}: ${escapeHtml(termRangeText)}. Lịch tháng vẫn xem được cả năm; ${isLecturerSchedule ? 'lớp giảng dạy' : 'môn học'} chỉ hiện trong thời gian học kỳ.
           </div>
 
           <div class="timetable-hourly-wrapper">
@@ -3982,8 +3915,8 @@ async function renderStudentScheduleTab(container) {
             <div class="mini-calendar-header">
               <span class="mini-calendar-month-title">${calMonthName}</span>
               <div>
-                <button class="cal-nav-btn" onclick="navScheduleMonth(-1)" title="Tháng trước"><i class="fa-solid fa-chevron-left"></i></button>
-                <button class="cal-nav-btn" onclick="navScheduleMonth(1)" title="Tháng sau"><i class="fa-solid fa-chevron-right"></i></button>
+                <button class="cal-nav-btn" onclick="navScheduleMonth(-1, '${scheduleMode}')" title="Tháng trước"><i class="fa-solid fa-chevron-left"></i></button>
+                <button class="cal-nav-btn" onclick="navScheduleMonth(1, '${scheduleMode}')" title="Tháng sau"><i class="fa-solid fa-chevron-right"></i></button>
               </div>
             </div>
 
@@ -4010,34 +3943,37 @@ async function renderStudentScheduleTab(container) {
   }
 }
 
-window.selectScheduleCalendarDate = function(y, m, d) {
+window.selectScheduleCalendarDate = function(y, m, d, scheduleMode = 'student') {
   const selectedDate = new Date(y, m, d);
   window.selectedScheduleDate = selectedDate;
   window.miniCalDisplayedDate = new Date(selectedDate);
   const container = document.getElementById('page-view-content');
   if (container) {
-    renderStudentScheduleTab(container);
+    renderStudentScheduleTab(container, scheduleMode);
   }
 };
 
-window.navScheduleMonth = function(delta) {
+window.navScheduleMonth = function(delta, scheduleMode = 'student') {
   const current = window.miniCalDisplayedDate || new Date();
   const newDate = new Date(current.getFullYear(), current.getMonth() + delta, 1);
   window.miniCalDisplayedDate = newDate;
   const container = document.getElementById('page-view-content');
   if (container) {
-    renderStudentScheduleTab(container);
+    renderStudentScheduleTab(container, scheduleMode);
   }
 };
 
-window.resetScheduleToToday = function() {
+window.resetScheduleToToday = function(scheduleMode = 'student') {
   const today = new Date();
   window.selectedScheduleDate = today;
   window.miniCalDisplayedDate = new Date(today);
   const container = document.getElementById('page-view-content');
   if (container) {
-    renderStudentScheduleTab(container);
+    renderStudentScheduleTab(container, scheduleMode);
   }
 };
 
 window.renderStudentScheduleTab = renderStudentScheduleTab;
+window.renderLecturerScheduleTab = function(container) {
+  return renderStudentScheduleTab(container, 'lecturer');
+};
