@@ -3,6 +3,16 @@ export function getDemoAcademicStatus(index) {
   return bucket <= 5 ? 'warning_1' : 'active';
 }
 
+export function getAcademicResultProfile(status, courseIndex, defaultProfile) {
+  const warningProfiles = {
+    warning_1: ['C', 'D', 'F'],
+    warning_2: ['D', 'F', 'F', 'D', 'F', 'C'],
+    dismissed: ['F', 'F', 'F', 'D', 'F', 'C', 'F', 'F']
+  };
+  const profiles = warningProfiles[status];
+  return profiles ? profiles[courseIndex % profiles.length] : defaultProfile;
+}
+
 export function selectDemoCourses(
   student,
   courses,

@@ -157,7 +157,9 @@ export async function rebalanceLecturerWorkloads({
     .map(course => ({
       id: course.id,
       name: course.name,
-      category: course.Major?.departmentId || 'GENERAL'
+      category: ['HCM', 'MLN', 'LSD'].some(prefix => course.id.startsWith(prefix))
+        ? 'LLCT'
+        : (course.Major?.departmentId || 'GENERAL')
     }))
     .sort((first, second) =>
       first.category.localeCompare(second.category) ||
@@ -227,7 +229,7 @@ export async function rebalanceLecturerWorkloads({
     transaction
   });
 
-  const categories = ['CNTT', 'KT', 'GENERAL'];
+  const categories = ['CNTT', 'KT', 'LLCT', 'GENERAL'];
   const groupedByCategory = new Map();
   for (const category of categories) {
     groupedByCategory.set(

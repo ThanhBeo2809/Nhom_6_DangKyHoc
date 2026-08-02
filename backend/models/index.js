@@ -9,6 +9,7 @@ import Class from './Class.js';
 import Registration from './Registration.js';
 import Grade from './Grade.js';
 import Payment from './Payment.js';
+import PaymentTransaction from './PaymentTransaction.js';
 import AuditLog from './AuditLog.js';
 import AcademicTerm from './AcademicTerm.js';
 import RegistrationPeriod from './RegistrationPeriod.js';
@@ -73,6 +74,9 @@ Grade.belongsTo(Class, { foreignKey: 'classId' });
 Student.hasMany(Payment, { foreignKey: 'studentId', onDelete: 'CASCADE' });
 Payment.belongsTo(Student, { foreignKey: 'studentId' });
 
+Payment.hasMany(PaymentTransaction, { foreignKey: 'paymentId', onDelete: 'CASCADE' });
+PaymentTransaction.belongsTo(Payment, { foreignKey: 'paymentId' });
+
 // User <-> AuditLog (Người thực hiện ghi nhận log)
 User.hasMany(AuditLog, { foreignKey: 'userId', onDelete: 'SET NULL' });
 AuditLog.belongsTo(User, { foreignKey: 'userId' });
@@ -100,6 +104,7 @@ export {
   Registration,
   Grade,
   Payment,
+  PaymentTransaction,
   AuditLog,
   AcademicTerm,
   RegistrationPeriod,

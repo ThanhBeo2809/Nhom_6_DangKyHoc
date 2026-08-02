@@ -102,7 +102,8 @@ export async function seedMockData() {
     // --- 1. Tạo Khoa (Departments) ---
     const depts = [
       { id: 'CNTT', name: 'Khoa Công nghệ thông tin' },
-      { id: 'KT', name: 'Khoa Kinh tế và Kinh doanh quốc tế' }
+      { id: 'KT', name: 'Khoa Kinh tế và Kinh doanh quốc tế' },
+      { id: 'LLCT', name: 'Bộ môn Lý luận chính trị' }
     ];
     await Department.bulkCreate(depts, { ignoreDuplicates: true });
 
@@ -303,22 +304,32 @@ export async function seedMockData() {
     ];
     await Course.bulkCreate(courses, { updateOnDuplicate: ['prerequisiteId', 'name', 'credits', 'majorId', 'term'] });
 
-    // Tự động sinh 300 sinh viên (50 sinh viên cho mỗi ngành học)
+    // Tự động sinh thêm 38 sinh viên để hệ thống có tổng cộng 41 tài khoản
+    // sinh viên mặc định thuộc Khoa Công nghệ thông tin.
+    // Toàn bộ sinh viên sinh năm 2006 và nhập học năm 2024 để HK1-2026
+    // được hiển thị là Năm thứ 3 - Học kỳ 5.
     const hoList = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Vũ', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Ngô', 'Dương', 'Lý'];
     const demNam = ['Văn', 'Minh', 'Đức', 'Quốc', 'Hoàng', 'Tuấn', 'Hải', 'Thành', 'Hữu', 'Đình'];
     const demNu = ['Thị', 'Minh', 'Thu', 'Khánh', 'Ngọc', 'Phương', 'Bích', 'Hải', 'Ánh'];
     const tenNam = ['Anh', 'Bình', 'Cường', 'Dũng', 'Đạt', 'Đức', 'Hải', 'Hiếu', 'Hùng', 'Huy', 'Khoa', 'Long', 'Minh', 'Nam', 'Nghĩa', 'Phúc', 'Quân', 'Sơn', 'Tài', 'Tân', 'Thành', 'Thắng', 'Thịnh', 'Trung', 'Tuấn', 'Việt', 'Vinh'];
     const tenNu = ['Anh', 'Bình', 'Chi', 'Dung', 'Hà', 'Hằng', 'Hoa', 'Hương', 'Huyền', 'Linh', 'Mai', 'Nga', 'Ngân', 'Nhi', 'Nhung', 'Phương', 'Quyên', 'Quỳnh', 'Thảo', 'Trang', 'Tuyết', 'Vân', 'Yến'];
 
-    const majorList = ['cntt', 'attt', 'hthong_tt', 'kdqt', 'logistics', 'tmdt'];
-    const majorClassSuffix = { cntt: 'CNTT', attt: 'ATTT', hthong_tt: 'HTTT', kdqt: 'KDQT', logistics: 'LOG', tmdt: 'TMDT' };
-    const cohortYears = ['2025-09-05', '2024-09-05', '2023-09-05', '2022-09-05']; // Năm 1, Năm 2, Năm 3, Năm 4
-    const cohortPrefixes = ['D25', 'D24', 'D23', 'D22'];
+    const defaultEnrollmentDate = '2024-09-05';
+    const defaultMajorId = 'cntt';
+
+    function getDefaultAcademicStatus(studentNumber) {
+      if (studentNumber === 2) return 'warning_1';
+      if (studentNumber === 3) return 'warning_2';
+      if (studentNumber % 20 === 0) return 'dismissed';
+      if (studentNumber % 10 === 0) return 'warning_2';
+      if (studentNumber % 5 === 0) return 'warning_1';
+      return 'active';
+    }
 
     const generatedUsers = [];
     const generatedStudents = [];
 
-    for (let i = 4; i <= 303; i++) {
+    for (let i = 5; i <= 42; i++) {
       const idxStr = String(i).padStart(4, '0');
       const msv = `2410${idxStr}`;
       const userId = 200 + i;
@@ -330,17 +341,11 @@ export async function seedMockData() {
       const ten = isMale ? tenNam[i % tenNam.length] : tenNu[i % tenNu.length];
       const fullName = `${ho} ${dem} ${ten}`;
 
-      const cohortIdx = i % 4; // Chia đều thành 4 năm học
-      const enrollmentDate = cohortYears[cohortIdx];
-      const enrollYear = parseInt(enrollmentDate.split('-')[0], 10);
-      const birthYear = enrollYear - 18; // Năm 4 (2022) -> sinh 2004; Năm 3 (2023) -> sinh 2005; Năm 2 (2024) -> sinh 2006; Năm 1 (2025) -> sinh 2007
-
       const month = String((i % 12) + 1).padStart(2, '0');
       const day = String((i % 28) + 1).padStart(2, '0');
-      const dob = `${birthYear}-${month}-${day}`;
+      const dob = `2006-${month}-${day}`;
 
-      const majorId = majorList[i % majorList.length];
-      const classCode = `${cohortPrefixes[cohortIdx]}${majorClassSuffix[majorId]}${(i % 2) + 1}`;
+      const classCode = `D24CNTT${(i % 2) + 1}`;
       const email = `sv${idxStr}@student.pka.edu.vn`;
 
       generatedUsers.push({
@@ -356,10 +361,10 @@ export async function seedMockData() {
         gender,
         dob,
         email,
-        enrollmentDate,
-        majorId,
+        enrollmentDate: defaultEnrollmentDate,
+        majorId: defaultMajorId,
         class: classCode,
-        status: (i === 15 || i === 28 || i === 115 || i === 188) ? 'warning_1' : (i === 42 || i === 242 ? 'warning_2' : 'active'),
+        status: getDefaultAcademicStatus(i),
         userId
       });
     }
@@ -415,20 +420,22 @@ export async function seedMockData() {
 
     // --- 6. Tạo Sinh viên ---
     const students = [
-      { id: '24100001', name: 'Phạm Minh Khoa', gender: 'Nam', dob: '2004-02-14', email: 'sv001@student.pka.edu.vn', enrollmentDate: '2022-09-05', majorId: 'cntt', class: 'D22CNTT1', status: 'active', userId: 20 },
-      { id: '24100002', name: 'Lê Minh Anh', gender: 'Nữ', dob: '2006-07-22', email: 'sv002@student.pka.edu.vn', enrollmentDate: '2024-09-05', majorId: 'attt', class: 'D24ATTT1', status: 'active', userId: 21 },
-      { id: '24100003', name: 'Đỗ Quốc Việt', gender: 'Nam', dob: '2005-10-05', email: 'sv003@student.pka.edu.vn', enrollmentDate: '2023-09-05', majorId: 'kdqt', class: 'D23KDQT1', status: 'warning_1', userId: 22 },
+      { id: '24100001', name: 'Phạm Minh Khoa', gender: 'Nam', dob: '2006-02-14', email: 'sv001@student.pka.edu.vn', enrollmentDate: defaultEnrollmentDate, majorId: defaultMajorId, class: 'D24CNTT1', status: 'active', userId: 20 },
+      { id: '24100002', name: 'Lê Minh Anh', gender: 'Nữ', dob: '2006-07-22', email: 'sv002@student.pka.edu.vn', enrollmentDate: defaultEnrollmentDate, majorId: defaultMajorId, class: 'D24CNTT2', status: 'warning_1', userId: 21 },
+      { id: '24100003', name: 'Đỗ Quốc Việt', gender: 'Nam', dob: '2006-10-05', email: 'sv003@student.pka.edu.vn', enrollmentDate: defaultEnrollmentDate, majorId: defaultMajorId, class: 'D24CNTT1', status: 'warning_2', userId: 22 },
       ...generatedStudents
     ];
     await Student.bulkCreate(students, { ignoreDuplicates: true });
 
-    // Đồng bộ lại Ngày nhập học, Ngày sinh (dob) và Lớp học cho toàn bộ sinh viên trong DB
+    // Đồng bộ lại các giá trị hồ sơ mặc định cho toàn bộ sinh viên trong DB.
     for (let st of students) {
       const existingSt = await Student.findByPk(st.id);
       if (existingSt) {
         existingSt.enrollmentDate = st.enrollmentDate;
         existingSt.dob = st.dob;
+        existingSt.majorId = st.majorId;
         existingSt.class = st.class;
+        existingSt.status = st.status;
         await existingSt.save();
       }
     }

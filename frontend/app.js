@@ -295,11 +295,12 @@ function initSocketIO() {
   // Lắng nghe sự kiện thanh toán được xác nhận tự động
   socket.on('payment_confirmed', (data) => {
     console.log('💳 Thanh toán xác nhận:', data);
-    // Đóng modal QR
     closePaymentModal();
-    // Hiển thị thông báo thành công nổi bật
-    showToast('🎉 Thanh toán học phí đã được xác nhận! Mã GD: ' + data.transactionId, 'success');
-    // Refresh lại tab học phí
+    if (data.status === 'paid') {
+      showToast('🎉 Thanh toán học phí đã được xác nhận! Mã GD: ' + data.transactionId, 'success');
+    } else {
+      showToast(`Đã ghi nhận giao dịch ${data.transactionId}. Còn thiếu ${formatMoney(data.remainingAmount || 0)}.`, 'info');
+    }
     setTimeout(() => switchTab('student-tuition'), 500);
   });
 
@@ -580,7 +581,7 @@ async function renderTabContent(tabId, container) {
           </div>
           <div>
             <p style="margin-bottom:10px;"><strong>Lớp sinh hoạt:</strong> ${state.profile.class}</p>
-            <p style="margin-bottom:10px;"><strong>Năm học:</strong> <span class="badge badge-info">${state.profile.academicProgress ? state.profile.academicProgress.yearText : 'Năm thứ 4'}</span></p>
+            <p style="margin-bottom:10px;"><strong>Năm học:</strong> <span class="badge badge-info">${state.profile.academicProgress ? state.profile.academicProgress.yearText : 'Năm thứ 3'}</span></p>
             <p style="margin-bottom:10px;"><strong>Học kỳ hiện tại:</strong> <strong style="color:var(--primary);">${state.profile.academicProgress ? state.profile.academicProgress.semesterText : currentSemesterName()}</strong></p>
             <p style="margin-bottom:10px;"><strong>Khoa:</strong> ${state.profile.Major.Department.name}</p>
             <p style="margin-bottom:10px;"><strong>Ngành học:</strong> ${state.profile.Major.name}</p>
@@ -634,6 +635,17 @@ async function renderTabContent(tabId, container) {
     }
 
     const discountAmount = Math.round((payment.amount || 0) * (payment.discountRate || 0));
+    const paymentTransactions = Array.isArray(payment.PaymentTransactions)
+      ? payment.PaymentTransactions
+      : [];
+    const paymentTransactionRows = paymentTransactions.map(transaction => `
+      <tr>
+        <td><code>${escapeHtml(transaction.transactionId || '-')}</code></td>
+        <td>${formatMoney(transaction.amount || 0)}</td>
+        <td>${escapeHtml(transaction.method || '-')}</td>
+        <td>${new Date(transaction.receivedAt).toLocaleString('vi-VN')}</td>
+      </tr>
+    `).join('');
 
     container.innerHTML = `
       <div class="glass-card">
@@ -678,6 +690,15 @@ async function renderTabContent(tabId, container) {
           ${payment.paidAt ? `<p><strong>Ngày nộp:</strong> ${formatDate(payment.paidAt)}</p>` : ''}
           ${payment.notes ? `<p><strong>Ghi chú:</strong> <em>${payment.notes}</em></p>` : ''}
         </div>
+        <h4 style="margin-top:22px;">Lịch sử giao dịch đã xác nhận</h4>
+        <div class="table-responsive" style="margin-top:10px;">
+          <table class="glass-table">
+            <thead><tr><th>Mã giao dịch</th><th>Số tiền</th><th>Phương thức</th><th>Thời gian</th></tr></thead>
+            <tbody>
+              ${paymentTransactionRows || '<tr><td colspan="4" class="text-center" style="color:var(--text-secondary);">Chưa có giao dịch được xác nhận.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
         <div class="text-center" style="margin-top:20px; display:flex; justify-content:center; gap:10px;">
           ${paymentAction}
           <button class="btn-secondary" onclick="exportTuitionReceiptPDF()"><i class="fa-solid fa-print"></i> In / Xuất PDF Biên Lai</button>
@@ -694,18 +715,19 @@ async function renderTabContent(tabId, container) {
     let gradeRows = '';
     if (data && Array.isArray(data.gradesDetail)) {
       data.gradesDetail.forEach(g => {
-        let termStr = currentSemesterId();
-        if (g.classId) {
-          if (g.classId.includes('HK1-N1')) termStr = 'HK1 (Năm 1)';
-          else if (g.classId.includes('HK2-N1')) termStr = 'HK2 (Năm 1)';
-          else if (g.classId.includes('_PAST')) termStr = 'Kỳ trước';
-        } else {
-          termStr = 'Năm 1';
-        }
+        const termStr = g.Class?.semester || (g.Course?.term ? `Học kỳ ${g.Course.term}` : 'Chưa xác định');
         
         let phucKhaoBtn = '';
-        if (g.reEvalStatus === 'none' && g.isLocked) {
+        const canRequestReEvaluation = Boolean(g.classId && g.Class?.lecturerId);
+        const currentSemesterOrdinal = Number(state.profile?.academicProgress?.semesterOrdinal || 0);
+        const eligibleReEvaluationTerm = currentSemesterOrdinal > 1 ? currentSemesterOrdinal - 1 : null;
+        const belongsToReEvaluationTerm = Number(g.Course?.term) === eligibleReEvaluationTerm;
+        if (g.reEvalStatus === 'none' && g.isLocked && canRequestReEvaluation && belongsToReEvaluationTerm) {
           phucKhaoBtn = `<button class="btn-sm btn-secondary" onclick="requestPhucKhao(${g.id})"><i class="fa-regular fa-paper-plane"></i> Phúc khảo</button>`;
+        } else if (g.reEvalStatus === 'none' && g.isLocked && !belongsToReEvaluationTerm) {
+          phucKhaoBtn = `<span class="badge badge-secondary" title="Chỉ được phúc khảo môn thuộc học kỳ liền trước">Chỉ HK${eligibleReEvaluationTerm || '-'}</span>`;
+        } else if (g.reEvalStatus === 'none' && g.isLocked) {
+          phucKhaoBtn = '<span class="badge badge-secondary" title="Kết quả chưa gắn với lớp và giảng viên phụ trách">Chưa thể phúc khảo online</span>';
         } else if (g.reEvalStatus === 'requested') {
           phucKhaoBtn = `<span class="badge badge-warning"><i class="fa-solid fa-spinner fa-spin"></i> Đang chờ phúc khảo</span>`;
         } else if (g.reEvalStatus === 'completed') {
@@ -897,6 +919,13 @@ async function renderTabContent(tabId, container) {
     // Đơn phúc khảo
     const res = await fetch(`${API_BASE}/lecturer/phuc-khao`, { headers });
     const requests = await res.json();
+
+    if (!res.ok) {
+      throw new Error(requests.message || 'Không thể tải danh sách phúc khảo.');
+    }
+    if (!Array.isArray(requests)) {
+      throw new Error('Dữ liệu phúc khảo không đúng định dạng.');
+    }
 
     let requestRows = '';
     requests.forEach(r => {
@@ -2496,8 +2525,12 @@ async function requestPhucKhao(gradeId) {
       body: JSON.stringify({ gradeId, reason })
     });
     const data = await res.json();
-    alert(data.message);
-    switchTab(state.currentTab);
+    if (!res.ok) {
+      showToast(data.message || 'Không thể gửi đơn phúc khảo.', 'error');
+      return;
+    }
+    showToast(data.message, 'success');
+    await switchTab(state.currentTab);
   } catch (e) {
     console.error(e);
   }
@@ -2825,9 +2858,9 @@ function studentStatusBadge(status) {
     case 'active':
       return '<span class="badge badge-success">Bình thường</span>';
     case 'warning_1':
-      return '<span class="badge badge-warning">Cảnh cáo Mức 1</span>';
+      return '<span class="badge badge-warning">Cảnh báo Mức 1</span>';
     case 'warning_2':
-      return '<span class="badge badge-warning" style="background:rgba(239, 68, 68, 0.2); color:#f87171;">Cảnh cáo Mức 2</span>';
+      return '<span class="badge badge-warning" style="background:rgba(239, 68, 68, 0.2); color:#f87171;">Cảnh báo Mức 2</span>';
     case 'dismissed':
       return '<span class="badge badge-danger">Buộc thôi học</span>';
     default:
@@ -3794,27 +3827,34 @@ async function renderStudentScheduleTab(container, scheduleMode = 'student') {
       const topOffset = (offsetWithinHour / 60) * gridHourHeight;
       const cardHeight = (durationMinutes / 60) * gridHourHeight;
       const slotsStr = `Tiết ${c.startSlot}-${Number(c.startSlot) + Number(c.numSlots) - 1}`;
-      const scheduleOwnerDetail = isLecturerSchedule
-        ? ''
-        : `<p><i class="fa-solid fa-user-tie" style="color:#4f46e5;"></i> ${escapeHtml(c.lecturerName || 'Chưa phân công')}</p>`;
-      const scheduleLocationDetail = isLecturerSchedule
-        ? `<p><i class="fa-solid fa-location-dot" style="color:#d97706;"></i> ${escapeHtml(c.roomName)} · ${Number(c.enrolledCount) || 0}/${Number(c.capacity) || 0} SV</p>`
-        : `<p><i class="fa-solid fa-location-dot" style="color:#d97706;"></i> Có mặt ${escapeHtml(c.roomName)} (${c.roomType === 'lab' ? 'PC' : 'LT'})</p>`;
-      const scheduleClassLabel = isLecturerSchedule
-        ? `${escapeHtml(c.classId)} · ${escapeHtml(c.courseName)}`
-        : `${escapeHtml(c.courseName)}-${c.dayOfWeek}-${c.startSlot}-25(${escapeHtml(c.classId)})`;
+      const roomTypeLabel = c.roomType === 'lab' ? 'Thực hành' : 'Lý thuyết';
+      const scheduleTitle = isLecturerSchedule
+        ? `${escapeHtml(c.courseId || c.classId)} – ${escapeHtml(c.courseName)}`
+        : `${escapeHtml(c.courseId || c.classId)} – ${escapeHtml(c.courseName)}`;
+      const scheduleTimeHeader = '';
+      const scheduleBody = isLecturerSchedule
+        ? `
+            <p class="schedule-class-code"><strong>Lớp:</strong> ${escapeHtml(c.classId)}</p>
+            <p>${timeRange.startTime}–${timeRange.endTime} · ${slotsStr}</p>
+            <p>Phòng ${escapeHtml(c.roomName)} · ${roomTypeLabel}</p>
+            <p><strong>Sĩ số:</strong> ${Number(c.enrolledCount) || 0}/${Number(c.capacity) || 0} sinh viên</p>
+          `
+        : `
+            <p class="schedule-class-code"><strong>Lớp:</strong> ${escapeHtml(c.classId)}</p>
+            <p><i class="fa-regular fa-clock"></i> ${timeRange.startTime}–${timeRange.endTime} · ${slotsStr}</p>
+            <p><i class="fa-solid fa-location-dot"></i> Phòng ${escapeHtml(c.roomName)} · ${roomTypeLabel}</p>
+            <p><i class="fa-solid fa-user-tie"></i> <strong>GV:</strong> ${escapeHtml(c.lecturerName || 'Chưa phân công')}</p>
+          `;
 
       scheduleCardsHTML += `
         <div class="schedule-card-item schedule-card-positioned ${isLecturerSchedule ? 'lecturer-schedule-card' : ''}"
              style="grid-column:${dayIndex + 2}; grid-row:${gridRow} / span ${coveredRows}; margin-top:${topOffset}px; height:${cardHeight}px;">
           <div class="schedule-card-header-amber">
-            <div class="schedule-card-title">${escapeHtml(c.courseName)}</div>
-            <div class="schedule-card-time">${timeRange.startTime} - ${timeRange.endTime} (${slotsStr})</div>
+            <div class="schedule-card-title">${scheduleTitle}</div>
+            ${scheduleTimeHeader}
           </div>
           <div class="schedule-card-body">
-            <p style="font-weight:600; color:#1e293b;">${scheduleClassLabel}</p>
-            ${scheduleLocationDetail}
-            ${scheduleOwnerDetail}
+            ${scheduleBody}
           </div>
         </div>
       `;

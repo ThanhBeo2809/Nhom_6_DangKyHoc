@@ -41,6 +41,7 @@ const tableOrder = [
   'Registrations',
   'Grades',
   'Payments',
+  'PaymentTransactions',
   'Notifications',
   'RefreshTokens',
   'AuditLogs'

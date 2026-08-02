@@ -1,6 +1,9 @@
 import express from 'express';
 import ExcelJS from 'exceljs';
-import { sequelize, Class, Course, Lecturer, Registration, Student, Grade, Payment, AuditLog, Major } from '../models/index.js';
+import {
+  sequelize, Class, Course, Lecturer, Registration, Student, Grade,
+  Payment, PaymentTransaction, AuditLog, Major
+} from '../models/index.js';
 import { Op, col, fn } from 'sequelize';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware.js';
 import { updateTuition, COST_PER_CREDIT } from '../utils/tuitionHelper.js';
@@ -14,6 +17,11 @@ import {
 } from '../utils/registrationHelper.js';
 import { getRegistrationPolicy } from '../utils/academicStandingHelper.js';
 import { paymentWithBalance } from '../utils/paymentBalanceHelper.js';
+import {
+  getEligibleReEvaluationTerm,
+  isCourseEligibleForReEvaluation,
+  normalizeReEvaluationReason
+} from '../utils/reEvaluationHelper.js';
 
 const router = express.Router();
 
@@ -674,6 +682,7 @@ router.get('/schedule', async (req, res) => {
 
     const scheduleList = regs.map(r => ({
       classId: r.Class.id,
+      courseId: r.Class.Course.id,
       courseName: r.Class.Course.name,
       credits: r.Class.Course.credits,
       lecturerName: r.Class.Lecturer.name,
@@ -699,8 +708,14 @@ router.get('/tuition', async (req, res) => {
     if (!student) return;
 
     const semester = await getCurrentSemester();
-    let payment = await Payment.findOne({
-      where: { studentId: student.id, semester }
+    await updateTuition(student.id, semester);
+    const payment = await Payment.findOne({
+      where: { studentId: student.id, semester },
+      include: [{
+        model: PaymentTransaction,
+        separate: true,
+        order: [['receivedAt', 'DESC']]
+      }]
     });
 
     const regs = await Registration.findAll({
@@ -761,7 +776,7 @@ router.get('/grades', async (req, res) => {
     // Lấy toàn bộ điểm số của sinh viên (kể cả quá khứ và kỳ này, chỉ lấy đã khóa để đảm bảo chính xác)
     const rawGrades = await Grade.findAll({
       where: { studentId: student.id, isLocked: true },
-      include: [Course, { model: Class, attributes: ['id', 'semester'] }]
+      include: [Course, { model: Class, attributes: ['id', 'semester', 'lecturerId'] }]
     });
 
     // Lọc loại bỏ bản ghi trùng lặp (nếu có)
@@ -844,31 +859,68 @@ router.get('/grades', async (req, res) => {
 // 9. Gửi đơn phúc khảo điểm trực tuyến
 router.post('/phuc-khao', async (req, res) => {
   const { gradeId, reason } = req.body;
+  let transaction;
 
   try {
     const student = await getStudentFromReq(req, res);
     if (!student) return;
 
+    const normalizedReason = normalizeReEvaluationReason(reason);
+    transaction = await sequelize.transaction();
+    const currentSemester = await getCurrentSemester({ transaction });
+    const academicProgress = calculateAcademicProgress(student.enrollmentDate, currentSemester);
+    const eligibleTerm = getEligibleReEvaluationTerm(academicProgress.semesterOrdinal);
+
     const grade = await Grade.findOne({
-      where: { id: gradeId, studentId: student.id }
+      where: { id: gradeId, studentId: student.id },
+      include: [
+        { model: Course, required: false },
+        {
+          model: Class,
+          required: false,
+          include: [{ model: Lecturer, required: false }]
+        }
+      ],
+      transaction,
+      lock: transaction.LOCK.UPDATE
     });
 
     if (!grade) {
+      await transaction.rollback();
       return res.status(404).json({ message: 'Không tìm thấy thông tin điểm số này.' });
     }
 
+    if (!isCourseEligibleForReEvaluation(grade.Course?.term, academicProgress.semesterOrdinal)) {
+      await transaction.rollback();
+      return res.status(403).json({
+        code: 'RE_EVALUATION_TERM_NOT_ELIGIBLE',
+        message: `Học kỳ hiện tại là Học kỳ ${academicProgress.semesterOrdinal}. Chỉ được phúc khảo các môn thuộc Học kỳ ${eligibleTerm}.`
+      });
+    }
+
     if (!grade.isLocked) {
+      await transaction.rollback();
       return res.status(400).json({ message: 'Môn học chưa được giảng viên khóa điểm, không thể phúc khảo.' });
     }
 
     if (grade.reEvalStatus !== 'none') {
+      await transaction.rollback();
       return res.status(400).json({ message: 'Bạn đã nộp đơn phúc khảo cho môn này rồi.' });
+    }
+
+    const assignedLecturer = grade.Class?.Lecturer;
+    if (!grade.classId || !assignedLecturer) {
+      await transaction.rollback();
+      return res.status(409).json({
+        code: 'RE_EVALUATION_LECTURER_NOT_ASSIGNED',
+        message: 'Kết quả này chưa gắn với lớp học phần và giảng viên phụ trách, nên chưa thể chuyển đơn phúc khảo. Vui lòng liên hệ Phòng Đào tạo để bổ sung dữ liệu lớp.'
+      });
     }
 
     // Thay đổi trạng thái sang requested
     grade.reEvalStatus = 'requested';
-    grade.reEvalNote = reason;
-    await grade.save();
+    grade.reEvalNote = normalizedReason;
+    await grade.save({ transaction });
 
     // Ghi Audit Log
     const clientIp = req.ip || req.headers['x-forwarded-for'];
@@ -876,14 +928,42 @@ router.post('/phuc-khao', async (req, res) => {
       userId: student.userId,
       username: student.email.split('@')[0],
       action: 'YEU_CAU_PHUC_KHAO',
-      details: JSON.stringify({ gradeId, courseId: grade.courseId, reason }),
+      details: JSON.stringify({
+        gradeId,
+        courseId: grade.courseId,
+        classId: grade.classId,
+        lecturerId: assignedLecturer.id,
+        reason: normalizedReason
+      }),
       ipAddress: clientIp
+    }, { transaction });
+
+    const notification = await createNotification({
+      userId: assignedLecturer.userId,
+      type: 'grade',
+      title: 'Có yêu cầu phúc khảo mới',
+      message: `Sinh viên ${student.id} đã gửi yêu cầu phúc khảo môn ${grade.courseId}.`,
+      data: { gradeId: grade.id, classId: grade.classId, studentId: student.id },
+      transaction
     });
 
-    return res.json({ message: 'Nộp đơn phúc khảo thành công! Điểm môn này sẽ được tạm khóa để xem xét.' });
+    await transaction.commit();
+    const io = req.app.get('io');
+    if (io && notification) {
+      io.to(`user_${assignedLecturer.userId}`).emit('notification_created', notification.toJSON());
+    }
+
+    return res.json({
+      message: `Nộp đơn phúc khảo thành công và đã chuyển đến giảng viên ${assignedLecturer.name}.`,
+      reviewer: { id: assignedLecturer.id, name: assignedLecturer.name }
+    });
   } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
     console.error('Lỗi gửi phúc khảo:', error);
-    return res.status(500).json({ message: 'Lỗi server khi nộp đơn.' });
+    return res.status(error.status || 500).json({
+      code: error.code,
+      message: error.message || 'Lỗi server khi nộp đơn.'
+    });
   }
 });
 

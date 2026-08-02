@@ -4,6 +4,7 @@ import { sequelize, Class, Course, Lecturer, Registration, Student, Grade, Audit
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware.js';
 import { getCurrentSemester } from '../utils/academicTermHelper.js';
 import { createNotification } from '../utils/notificationHelper.js';
+import { parseReEvaluationGrades } from '../utils/reEvaluationHelper.js';
 
 const router = express.Router();
 
@@ -474,19 +475,20 @@ router.get('/phuc-khao', async (req, res) => {
     const lecturer = await getLecturerFromReq(req, res);
     if (!lecturer) return;
 
-    // Tìm tất cả lớp học phần của giảng viên
-    const classes = await Class.findAll({
-      where: { lecturerId: lecturer.id }
-    });
-    const classIds = classes.map(c => c.id);
-
-    // Tìm các yêu cầu phúc khảo chưa giải quyết
+    // Truy vấn trực tiếp qua lớp để chỉ trả đơn đúng giảng viên phụ trách.
     const requests = await Grade.findAll({
-      where: {
-        classId: classIds,
-        reEvalStatus: 'requested'
-      },
-      include: [Student, Course]
+      where: { reEvalStatus: 'requested' },
+      include: [
+        Student,
+        Course,
+        {
+          model: Class,
+          required: true,
+          where: { lecturerId: lecturer.id },
+          attributes: ['id', 'semester', 'lecturerId']
+        }
+      ],
+      order: [['updatedAt', 'ASC'], ['id', 'ASC']]
     });
 
     return res.json(requests);
@@ -501,27 +503,40 @@ router.post('/phuc-khao/:gradeId/resolve', async (req, res) => {
   const { gradeId } = req.params;
   const { attendanceGrade, midtermGrade, finalGrade } = req.body;
 
+  let transaction;
   try {
     const lecturer = await getLecturerFromReq(req, res);
     if (!lecturer) return;
 
-    const grade = await Grade.findByPk(gradeId);
-    if (!grade) {
-      return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm số.' });
-    }
-
-    // Xác nhận giảng viên dạy lớp đó
-    const cls = await Class.findOne({
-      where: { id: grade.classId, lecturerId: lecturer.id }
+    const parsedGrades = parseReEvaluationGrades({
+      attendanceGrade,
+      midtermGrade,
+      finalGrade
     });
+    transaction = await sequelize.transaction();
 
-    if (!cls) {
-      return res.status(403).json({ message: 'Bạn không có quyền sửa điểm phúc khảo của lớp này.' });
+    const grade = await Grade.findByPk(gradeId, {
+      include: [{
+        model: Class,
+        required: true,
+        where: { lecturerId: lecturer.id }
+      }],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (!grade) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Không tìm thấy đơn phúc khảo thuộc lớp bạn phụ trách.' });
     }
 
-    const att = parseFloat(attendanceGrade);
-    const mid = parseFloat(midtermGrade);
-    const fin = parseFloat(finalGrade);
+    if (grade.reEvalStatus !== 'requested') {
+      await transaction.rollback();
+      return res.status(409).json({ message: 'Đơn phúc khảo này không còn ở trạng thái chờ xử lý.' });
+    }
+
+    const att = parsedGrades.attendanceGrade;
+    const mid = parsedGrades.midtermGrade;
+    const fin = parsedGrades.finalGrade;
     const details = calculateGradeDetails(att, mid, fin);
 
     // Lưu lại điểm số sau phúc khảo
@@ -534,7 +549,7 @@ router.post('/phuc-khao/:gradeId/resolve', async (req, res) => {
     grade.letterGrade = details.letterGrade;
     grade.grade4 = details.grade4;
     grade.reEvalStatus = 'completed'; // Đã chấm lại xong
-    await grade.save();
+    await grade.save({ transaction });
 
     // Ghi Audit Log
     const clientIp = req.ip || req.headers['x-forwarded-for'];
@@ -550,22 +565,32 @@ router.post('/phuc-khao/:gradeId/resolve', async (req, res) => {
         total10: details.total10
       }),
       ipAddress: clientIp
-    });
+    }, { transaction });
 
-    const gradeStudent = await Student.findByPk(grade.studentId);
-    await createNotification({
+    const gradeStudent = await Student.findByPk(grade.studentId, { transaction });
+    const notification = await createNotification({
       userId: gradeStudent?.userId,
       type: 'grade',
       title: 'Phúc khảo đã được xử lý',
       message: `Kết quả phúc khảo môn ${grade.courseId} đã được cập nhật.`,
       data: { gradeId: grade.id, classId: grade.classId },
-      io: req.app.get('io')
+      transaction
     });
+
+    await transaction.commit();
+    const io = req.app.get('io');
+    if (io && notification) {
+      io.to(`user_${gradeStudent.userId}`).emit('notification_created', notification.toJSON());
+    }
 
     return res.json({ message: 'Giải quyết phúc khảo và cập nhật điểm số mới thành công!', grade });
   } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
     console.error('Lỗi xử lý phúc khảo:', error);
-    return res.status(500).json({ message: 'Lỗi server khi phê duyệt điểm.' });
+    return res.status(error.status || 500).json({
+      code: error.code,
+      message: error.message || 'Lỗi server khi phê duyệt điểm.'
+    });
   }
 });
 

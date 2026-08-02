@@ -17,6 +17,7 @@ import sequelize from './config/db.js';
 import { seedMockData } from './mockData.js';
 import { Student, User } from './models/index.js';
 import { verifyAccessToken } from './utils/authSecurityHelper.js';
+import { backfillLegacyPaymentTransactions } from './utils/paymentTransactionHelper.js';
 
 // Import Routes
 import authRoutes from './routes/auth.js';
@@ -152,6 +153,7 @@ async function startServer() {
           "UPDATE Payments SET paidAmount = finalAmount WHERE status = 'paid' AND finalAmount > 0;"
         );
       }
+      await backfillLegacyPaymentTransactions();
     } catch (syncErr) {
       console.error('Lỗi sync CSDL:', syncErr);
       if (process.env.NODE_ENV === 'production') throw syncErr;

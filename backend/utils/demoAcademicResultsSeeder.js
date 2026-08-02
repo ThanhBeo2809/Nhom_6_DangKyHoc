@@ -1,5 +1,5 @@
+import { Op } from 'sequelize';
 import {
-  AcademicTerm,
   Class,
   Course,
   Grade,
@@ -8,27 +8,32 @@ import {
   Student,
   sequelize
 } from '../models/index.js';
-import { Op } from 'sequelize';
-import { updateTuition } from './tuitionHelper.js';
-import {
-  chooseFreeLecturer,
-  getDemoAcademicStatus,
-  selectDemoCourses
-} from './demoAcademicResultsPolicy.js';
+import { getAcademicResultProfile } from './demoAcademicResultsPolicy.js';
+
+const HISTORY_CLASS_PREFIX = 'KQHIST_';
+const GENERAL_COURSE_PREFIXES = Object.freeze([
+  'MLN', 'HCM', 'LSD', 'MAT', 'STA', 'PHY', 'ENG', 'TC', 'QP'
+]);
+const TERM_SEMESTERS = Object.freeze({
+  1: 'HK1-2024',
+  2: 'HK2-2024',
+  3: 'HK1-2025',
+  4: 'HK2-2025'
+});
 
 const RESULT_PROFILES = Object.freeze({
   A: Object.freeze({ attendanceGrade: 9.2, midtermGrade: 8.8, finalGrade: 9.0 }),
   B: Object.freeze({ attendanceGrade: 8.0, midtermGrade: 7.4, finalGrade: 7.2 }),
+  C: Object.freeze({ attendanceGrade: 7.0, midtermGrade: 6.0, finalGrade: 5.8 }),
   D: Object.freeze({ attendanceGrade: 6.0, midtermGrade: 4.5, finalGrade: 4.2 }),
   F: Object.freeze({ attendanceGrade: 5.0, midtermGrade: 3.0, finalGrade: 2.5 })
 });
 
-const CLASS_ROLES = Object.freeze({
-  high: Object.freeze({ suffix: 'H', semester: 'current', dayOfWeek: 2 }),
-  low: Object.freeze({ suffix: 'L', semester: 'current', dayOfWeek: 3 }),
-  retake: Object.freeze({ suffix: 'R', semester: 'current', dayOfWeek: 4 }),
-  improve: Object.freeze({ suffix: 'I', semester: 'current', dayOfWeek: 5 }),
-  past: Object.freeze({ suffix: 'P', semester: 'past', dayOfWeek: 6 })
+const TERM_CREDIT_TARGETS = Object.freeze({
+  1: Object.freeze([18]),
+  2: Object.freeze([22]),
+  3: Object.freeze([20, 23]),
+  4: Object.freeze([17, 20, 23])
 });
 
 function calculateGrade(profileName) {
@@ -46,223 +51,233 @@ function calculateGrade(profileName) {
   return { ...components, total10, letterGrade: 'F', grade4: 0 };
 }
 
-function classId(courseId, role) {
-  return `KQDEMO_${courseId}_${CLASS_ROLES[role].suffix}`;
+function historyClassId(course) {
+  return `${HISTORY_CLASS_PREFIX}T${course.term}_${course.id}`;
 }
 
-function gradeRow(studentId, courseId, role, profileName) {
-  return {
-    studentId,
-    courseId,
-    classId: classId(courseId, role),
-    ...calculateGrade(profileName),
-    isLocked: true,
-    reEvalStatus: 'none',
-    reEvalNote: null
-  };
+function resultProfileFor(student, studentIndex, courseIndex) {
+  const bucket = (studentIndex * 3 + courseIndex) % 12;
+  let defaultProfile = 'A';
+  if (bucket === 0) defaultProfile = 'F';
+  else if (bucket === 1) defaultProfile = 'D';
+  else if (bucket === 2) defaultProfile = 'C';
+  else if (bucket <= 6) defaultProfile = 'B';
+  return getAcademicResultProfile(student.status, courseIndex, defaultProfile);
+}
+
+function calculateProgramCredits(courses) {
+  return courses.reduce((sum, course) => sum + Number(course.credits || 0), 0);
+}
+
+function belongsToInformationTechnologyCurriculum(course) {
+  if (course.majorId === 'cntt') return true;
+  if (course.majorId !== null) return false;
+  const courseId = String(course.id).toUpperCase();
+  return GENERAL_COURSE_PREFIXES.some(prefix => courseId.startsWith(prefix));
+}
+
+function rotate(items, offset) {
+  if (items.length === 0) return [];
+  const normalizedOffset = offset % items.length;
+  return [...items.slice(normalizedOffset), ...items.slice(0, normalizedOffset)];
+}
+
+function selectStudentCourses(courses, studentIndex) {
+  const selected = [];
+  const selectedIds = new Set();
+
+  for (let term = 1; term <= 4; term += 1) {
+    const termCourses = courses.filter(course => Number(course.term) === term);
+    const commonCourses = termCourses.filter(course => course.majorId === null);
+    const majorCourses = rotate(
+      termCourses.filter(course => course.majorId === 'cntt'),
+      studentIndex + term
+    );
+    const targets = TERM_CREDIT_TARGETS[term];
+    const targetCredits = targets[studentIndex % targets.length];
+    const termSelection = [...commonCourses];
+    let selectedCredits = calculateProgramCredits(termSelection);
+
+    for (const course of majorCourses) {
+      const prerequisiteSatisfied = !course.prerequisiteId
+        || selectedIds.has(course.prerequisiteId);
+      if (!prerequisiteSatisfied) continue;
+      const nextCredits = selectedCredits + Number(course.credits || 0);
+      if (nextCredits > targetCredits) continue;
+      termSelection.push(course);
+      selectedCredits = nextCredits;
+    }
+
+    if (selectedCredits < 12 || selectedCredits > 24) {
+      throw new Error(
+        `Sinh viên thứ ${studentIndex + 1} có ${selectedCredits} tín chỉ ở học kỳ ${term}; yêu cầu 12-24.`
+      );
+    }
+    termSelection.forEach(course => selectedIds.add(course.id));
+    selected.push(...termSelection);
+  }
+
+  return selected;
 }
 
 export async function seedAllStudentAcademicResults() {
   const transaction = await sequelize.transaction();
   try {
-    const [students, courses, lecturers, currentTerm] = await Promise.all([
-      Student.findAll({ order: [['id', 'ASC']], transaction }),
-      Course.findAll({ order: [['term', 'ASC'], ['id', 'ASC']], transaction }),
-      Lecturer.findAll({ order: [['id', 'ASC']], transaction }),
-      AcademicTerm.findOne({
-        where: { isCurrent: true },
-        order: [['startDate', 'DESC']],
+    const [students, allCourses, lecturers] = await Promise.all([
+      Student.findAll({
+        where: { majorId: 'cntt' },
+        order: [['id', 'ASC']],
+        transaction
+      }),
+      Course.findAll({
+        where: { term: { [Op.between]: [1, 4] } },
+        order: [['term', 'ASC'], ['id', 'ASC']],
+        transaction
+      }),
+      Lecturer.findAll({
+        order: [['id', 'ASC']],
         transaction
       })
     ]);
+    const courses = allCourses.filter(belongsToInformationTechnologyCurriculum);
 
-    if (students.length === 0) throw new Error('Chưa có sinh viên để nhập kết quả.');
-    if (courses.length < 4) throw new Error('Cần ít nhất 4 môn học để tạo kết quả.');
-    if (lecturers.length === 0) throw new Error('Chưa có giảng viên để gán lớp kết quả mẫu.');
-    if (!currentTerm) throw new Error('Chưa cấu hình học kỳ hiện tại.');
+    if (students.length === 0) throw new Error('Chưa có sinh viên ngành Công nghệ thông tin để nhập kết quả.');
+    const cnttLecturers = lecturers.filter(lecturer => lecturer.departmentId === 'CNTT');
+    const politicalTheoryLecturers = lecturers.filter(lecturer => lecturer.departmentId === 'LLCT');
+    if (cnttLecturers.length === 0) throw new Error('Chưa có giảng viên Khoa Công nghệ thông tin để gán lớp.');
+    if (courses.some(course => course.id === 'HCM101') && politicalTheoryLecturers.length === 0) {
+      throw new Error('Chưa có giảng viên Bộ môn Lý luận chính trị để gán HCM101.');
+    }
 
-    // Chỉ thay thế dữ liệu do chính trình tạo này quản lý.
-    await Registration.destroy({
-      where: { classId: { [Op.like]: 'KQDEMO_%' } },
+    for (const term of Object.keys(TERM_SEMESTERS).map(Number)) {
+      if (!courses.some(course => Number(course.term) === term)) {
+        throw new Error(`Chương trình Công nghệ thông tin chưa có môn cho học kỳ ${term}.`);
+      }
+    }
+
+    const studentIds = students.map(student => student.id);
+
+    // Kết quả học tập được xây lại toàn bộ để không lẫn dữ liệu demo cũ,
+    // bản ghi không gắn lớp hoặc nhiều lần học không chủ đích.
+    await Grade.destroy({
+      where: { studentId: { [Op.in]: studentIds } },
       transaction
     });
-    await Grade.destroy({
-      where: { classId: { [Op.like]: 'KQDEMO_%' } },
+    await Registration.destroy({
+      where: {
+        [Op.or]: [
+          { classId: { [Op.like]: 'KQDEMO_%' } },
+          { classId: { [Op.like]: `${HISTORY_CLASS_PREFIX}%` } }
+        ]
+      },
       transaction
     });
     await Class.destroy({
-      where: { id: { [Op.like]: 'KQDEMO_%' } },
+      where: {
+        [Op.or]: [
+          { id: { [Op.like]: 'KQDEMO_%' } },
+          { id: { [Op.like]: `${HISTORY_CLASS_PREFIX}%` } }
+        ]
+      },
       transaction
     });
 
-    const existingRegistrations = await Registration.findAll({
-      include: [{
-        model: Class,
-        required: true,
-        where: { semester: currentTerm.id },
-        attributes: ['courseId']
-      }],
-      transaction
-    });
-    const blockedCoursesByStudent = new Map();
-    for (const registration of existingRegistrations) {
-      const blocked = blockedCoursesByStudent.get(registration.studentId) || new Set();
-      blocked.add(registration.Class.courseId);
-      blockedCoursesByStudent.set(registration.studentId, blocked);
-    }
-
-    const assignments = students.map((student, index) => {
-      const blockedCourses = blockedCoursesByStudent.get(student.id) || new Set();
-      const isDemoEligible = blockedCourses.size === 0;
+    const historyClasses = courses.map((course, index) => {
+      const lecturerPool = course.id === 'HCM101'
+        ? politicalTheoryLecturers
+        : cnttLecturers;
+      const lecturer = lecturerPool[index % lecturerPool.length];
       return {
-        student,
-        isDemoEligible,
-        status: isDemoEligible ? getDemoAcademicStatus(index) : 'active',
-        courses: isDemoEligible
-          ? selectDemoCourses(student, courses, index, blockedCourses)
-          : []
+        id: historyClassId(course),
+        courseId: course.id,
+        lecturerId: lecturer.id,
+        roomName: `HIST-${course.term}-${String(index + 1).padStart(2, '0')}`,
+        roomType: course.id.startsWith('INT') ? 'lab' : 'theory',
+        capacity: Math.max(students.length, 50),
+        semester: TERM_SEMESTERS[course.term],
+        dayOfWeek: 2 + (index % 6),
+        shift: index % 2 === 0 ? 'morning' : 'afternoon',
+        startSlot: index % 2 === 0 ? 1 : 4,
+        numSlots: 3,
+        status: 'active'
       };
     });
-    const usedCourses = new Map();
-    assignments.forEach(({ courses: selected }) => {
-      selected.forEach(course => usedCourses.set(course.id, course));
-    });
-
-    const existingClasses = await Class.findAll({
-      where: { status: 'active' },
-      attributes: [
-        'lecturerId', 'semester', 'dayOfWeek', 'shift', 'startSlot', 'numSlots'
-      ],
-      transaction
-    });
-    const lecturerMeetings = new Map();
-    for (const classInfo of existingClasses) {
-      const meetings = lecturerMeetings.get(classInfo.lecturerId) || [];
-      meetings.push({
-        semester: classInfo.semester,
-        dayOfWeek: classInfo.dayOfWeek,
-        shift: classInfo.shift,
-        startSlot: classInfo.startSlot,
-        numSlots: classInfo.numSlots
-      });
-      lecturerMeetings.set(classInfo.lecturerId, meetings);
-    }
-
-    const demoClasses = [];
-    let lecturerCursor = 0;
-    for (const course of usedCourses.values()) {
-      for (const [role, config] of Object.entries(CLASS_ROLES)) {
-        const meeting = {
-          semester: config.semester === 'current' ? currentTerm.id : 'HK2-2025',
-          dayOfWeek: config.dayOfWeek,
-          shift: 'morning',
-          startSlot: 1,
-          numSlots: 3
-        };
-        const lecturer = chooseFreeLecturer(
-          lecturers,
-          lecturerMeetings,
-          meeting,
-          lecturerCursor
-        );
-        lecturerCursor = (lecturers.indexOf(lecturer) + 1) % lecturers.length;
-        demoClasses.push({
-          id: classId(course.id, role),
-          courseId: course.id,
-          lecturerId: lecturer.id,
-          roomName: `KQ-${config.suffix}-${course.id}`,
-          roomType: 'theory',
-          capacity: 1000,
-          ...meeting,
-          status: 'active'
-        });
-      }
-    }
-    await Class.bulkCreate(demoClasses, {
-      updateOnDuplicate: [
-        'courseId', 'lecturerId', 'roomName', 'roomType', 'capacity',
-        'semester', 'dayOfWeek', 'shift', 'startSlot', 'numSlots', 'status'
-      ],
-      transaction
-    });
+    await Class.bulkCreate(historyClasses, { transaction });
 
     const gradeRows = [];
     const registrationRows = [];
-    for (const { student, status, courses: selected, isDemoEligible } of assignments) {
-      if (!isDemoEligible) continue;
-      const [highCourse, lowCourse, retakeCourse, improveCourse] = selected;
-      const isActive = status === 'active';
-
-      // Sinh viên bình thường có điểm A và F trong cùng kỳ nhưng GPA vẫn đạt.
-      // Sinh viên thuộc diện học vụ có điểm A ở kỳ trước và các điểm F ở kỳ này.
-      gradeRows.push(
-        gradeRow(student.id, highCourse.id, isActive ? 'high' : 'past', 'A'),
-        gradeRow(student.id, lowCourse.id, 'low', 'F'),
-        gradeRow(student.id, retakeCourse.id, 'past', 'F'),
-        gradeRow(student.id, retakeCourse.id, 'retake', isActive ? 'B' : 'F'),
-        gradeRow(student.id, improveCourse.id, 'past', 'D'),
-        gradeRow(student.id, improveCourse.id, 'improve', isActive ? 'A' : 'F')
+    students.forEach((student, studentIndex) => {
+      const selectedCourses = selectStudentCourses(courses, studentIndex);
+      const prerequisiteCourseIds = new Set(
+        selectedCourses.map(course => course.prerequisiteId).filter(Boolean)
       );
-
-      if (isActive) {
+      const profileNames = selectedCourses.map((course, courseIndex) => {
+        const profileName = resultProfileFor(student, studentIndex, courseIndex);
+        return profileName === 'F' && prerequisiteCourseIds.has(course.id)
+          ? 'D'
+          : profileName;
+      });
+      if (!profileNames.includes('F')) {
+        const failIndex = selectedCourses.findLastIndex(
+          course => !prerequisiteCourseIds.has(course.id)
+        );
+        if (failIndex < 0) throw new Error(`Không tìm được môn phù hợp để tạo điểm F cho ${student.id}.`);
+        profileNames[failIndex] = 'F';
+      }
+      if (!profileNames.includes('D')) {
+        const improveIndex = profileNames.findIndex(profile => profile !== 'F');
+        profileNames[improveIndex] = 'D';
+      }
+      if (!profileNames.includes('A')) {
+        const highIndex = profileNames.findIndex(profile => profile !== 'F' && profile !== 'D');
+        profileNames[highIndex] = 'A';
+      }
+      selectedCourses.forEach((course, courseIndex) => {
+        const classId = historyClassId(course);
+        gradeRows.push({
+          studentId: student.id,
+          courseId: course.id,
+          classId,
+          ...calculateGrade(profileNames[courseIndex]),
+          isLocked: true,
+          reEvalStatus: 'none',
+          reEvalNote: null
+        });
         registrationRows.push({
           studentId: student.id,
-          classId: classId(highCourse.id, 'high'),
+          classId,
           status: 'enrolled',
           type: 'regular',
           queueOrder: null
         });
-      }
-      registrationRows.push(
-        {
-          studentId: student.id,
-          classId: classId(lowCourse.id, 'low'),
-          status: 'enrolled',
-          type: 'regular',
-          queueOrder: null
-        },
-        {
-          studentId: student.id,
-          classId: classId(retakeCourse.id, 'retake'),
-          status: 'enrolled',
-          type: 'retake',
-          queueOrder: null
-        },
-        {
-          studentId: student.id,
-          classId: classId(improveCourse.id, 'improve'),
-          status: 'enrolled',
-          type: 'improve',
-          queueOrder: null
-        }
-      );
-    }
-
-    await Grade.bulkCreate(gradeRows, {
-      updateOnDuplicate: [
-        'attendanceGrade', 'midtermGrade', 'finalGrade', 'total10',
-        'letterGrade', 'grade4', 'isLocked', 'reEvalStatus', 'reEvalNote'
-      ],
-      transaction
-    });
-    await Registration.bulkCreate(registrationRows, {
-      updateOnDuplicate: ['status', 'type', 'queueOrder'],
-      transaction
+      });
     });
 
-    for (const { student, status } of assignments) {
-      await Student.update({ status }, { where: { id: student.id }, transaction });
-      await updateTuition(student.id, currentTerm.id, transaction);
+    await Grade.bulkCreate(gradeRows, { transaction });
+    await Registration.bulkCreate(registrationRows, { transaction });
+
+    const expectedResults = gradeRows.length;
+    const createdResults = await Grade.count({
+      where: {
+        studentId: { [Op.in]: studentIds },
+        classId: { [Op.like]: `${HISTORY_CLASS_PREFIX}%` },
+        isLocked: true
+      },
+      transaction
+    });
+    if (createdResults !== expectedResults) {
+      throw new Error(`Thiếu kết quả học tập: ${createdResults}/${expectedResults}.`);
     }
 
     await transaction.commit();
     return {
       students: students.length,
-      demoStudents: assignments.filter(item => item.isDemoEligible).length,
+      availableCoursesThroughTerm4: courses.length,
+      availableCreditsThroughTerm4: calculateProgramCredits(courses),
       grades: gradeRows.length,
       registrations: registrationRows.length,
-      demoClasses: demoClasses.length,
-      currentSemester: currentTerm.id
+      historyClasses: historyClasses.length,
+      semesters: TERM_SEMESTERS
     };
   } catch (error) {
     await transaction.rollback();

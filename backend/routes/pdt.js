@@ -13,9 +13,9 @@ import { createNotification } from '../utils/notificationHelper.js';
 import {
   getPaymentBalance,
   paymentWithBalance,
-  recordReceivedPayment,
   syncPaymentStatus
 } from '../utils/paymentBalanceHelper.js';
+import { applyPaymentTransaction } from '../utils/paymentTransactionHelper.js';
 import {
   canTransitionStudentStatus,
   getSuggestedWarningStatus,
@@ -896,7 +896,7 @@ router.post('/tuition/:paymentId/manual-pay', async (req, res) => {
   const { method, notes } = req.body;
 
   try {
-    const payment = await Payment.findByPk(paymentId, { include: [Student] });
+    let payment = await Payment.findByPk(paymentId, { include: [Student] });
     if (!payment) {
       return res.status(404).json({ message: 'Không tìm thấy hóa đơn học phí.' });
     }
@@ -907,10 +907,16 @@ router.post('/tuition/:paymentId/manual-pay', async (req, res) => {
 
     const txId = 'PDT-MANUAL-' + Date.now();
     const receivedAmount = getPaymentBalance(payment).remainingAmount;
-    recordReceivedPayment(payment, receivedAmount);
-    payment.paymentMethod = method || 'Tiền mặt / Trực tiếp tại PDT';
-    payment.transactionId = txId;
-    payment.paidAt = new Date();
+    const studentName = payment.Student?.name || '';
+    const applied = await applyPaymentTransaction({
+      paymentId: payment.id,
+      transactionId: txId,
+      amount: receivedAmount,
+      method: method || 'Tiền mặt / Trực tiếp tại PDT',
+      source: 'pdt_manual',
+      receivedAt: new Date()
+    });
+    payment = applied.payment;
     payment.notes = notes || 'Xác nhận nộp thủ công bởi Phòng Đào Tạo';
     await payment.save();
 
@@ -938,12 +944,14 @@ router.post('/tuition/:paymentId/manual-pay', async (req, res) => {
         amount: receivedAmount,
         transactionId: txId,
         paidAt: payment.paidAt,
+        status: payment.status,
+        remainingAmount: applied.balance.remainingAmount,
         message: 'Thanh toán học phí đã được Phòng Đào Tạo xác nhận gạch nợ thành công!'
       });
     }
 
     return res.json({
-      message: `Xác nhận gạch nợ thành công cho SV ${payment.studentId} (${payment.Student?.name})!`,
+      message: `Xác nhận gạch nợ thành công cho SV ${payment.studentId} (${studentName})!`,
       payment
     });
   } catch (error) {

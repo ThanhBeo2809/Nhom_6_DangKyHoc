@@ -3,9 +3,9 @@ import { Payment, Student, User, AuditLog } from '../models/index.js';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware.js';
 import { requirePaymentSimulationEnabled } from '../utils/paymentSecurityHelper.js';
 import {
-  getPaymentBalance,
-  recordReceivedPayment
+  getPaymentBalance
 } from '../utils/paymentBalanceHelper.js';
+import { applyPaymentTransaction } from '../utils/paymentTransactionHelper.js';
 
 const router = express.Router();
 
@@ -63,35 +63,44 @@ router.post('/sepay', verifyWebhookSecret, async (req, res) => {
       console.log('Webhook: Khong tim thay hoa don phu hop. Content:', content);
       return res.json({ success: true, message: 'Khong tim thay hoa don.' });
     }
-    if (payment.status === 'paid') {
-      return res.json({ success: true, message: 'Da thanh toan roi.' });
-    }
-
     const transactionId = body.referenceCode || body.transactionID || body.id || ('SEPAY-' + Date.now());
-    const outstanding = getPaymentBalance(payment).remainingAmount;
-    if (!Number.isFinite(amount) || amount < outstanding) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       return res.json({
         success: true,
-        message: 'So tien giao dich chua du de thanh toan hoa don.'
+        message: 'So tien giao dich khong hop le.'
       });
     }
 
-    const duplicateTransaction = await Payment.findOne({ where: { transactionId } });
-    if (duplicateTransaction && duplicateTransaction.id !== payment.id) {
-      return res.json({ success: true, message: 'Giao dich da duoc su dung cho hoa don khac.' });
+    const ownerUserId = payment.Student?.userId || null;
+    const ownerUsername = payment.Student?.User?.username || 'system';
+    const applied = await applyPaymentTransaction({
+      paymentId: payment.id,
+      transactionId,
+      amount,
+      method: 'MBBank VietQR (SePay Auto)',
+      source: 'sepay_webhook',
+      receivedAt: new Date(),
+      rawPayload: body
+    });
+    if (applied.duplicate) {
+      return res.json({ success: true, message: 'Giao dich da duoc xu ly truoc do.' });
     }
-
-    recordReceivedPayment(payment, amount);
-    payment.paymentMethod = 'Techcombank VietQR (SePay Auto)';
-    payment.transactionId = transactionId;
-    payment.paidAt = new Date();
-    await payment.save();
+    if (applied.alreadySettled) {
+      return res.json({ success: true, message: 'Hoa don da duoc thanh toan du.' });
+    }
+    payment = applied.payment;
 
     await AuditLog.create({
-      userId: payment.Student?.userId || null,
-      username: payment.Student?.User?.username || 'system',
+      userId: ownerUserId,
+      username: ownerUsername,
       action: 'NOP_HOC_PHI_AUTO',
-      details: JSON.stringify({ paymentId: payment.id, amount, transactionId, source: 'SePay Webhook' }),
+      details: JSON.stringify({
+        paymentId: payment.id,
+        amount,
+        transactionId,
+        source: 'SePay Webhook',
+        remainingAmount: applied.balance.remainingAmount
+      }),
       ipAddress: req.ip || 'SePay'
     });
 
@@ -105,7 +114,11 @@ router.post('/sepay', verifyWebhookSecret, async (req, res) => {
         amount,
         transactionId,
         paidAt: payment.paidAt,
-        message: 'Thanh toán học phí xác nhận thành công!'
+        status: payment.status,
+        remainingAmount: applied.balance.remainingAmount,
+        message: applied.balance.isSettled
+          ? 'Thanh toán học phí xác nhận thành công!'
+          : 'Đã ghi nhận một phần học phí.'
       });
       console.log('📡 Da phat Socket.IO payment_confirmed toi student_' + payment.studentId);
     }
@@ -128,7 +141,7 @@ router.post(
     const { paymentId } = req.body;
     if (!paymentId) return res.status(400).json({ message: 'Thiếu paymentId' });
 
-    const payment = await Payment.findByPk(paymentId, {
+    let payment = await Payment.findByPk(paymentId, {
       include: [{ model: Student, include: [User] }]
     });
 
@@ -139,18 +152,24 @@ router.post(
 
     const transactionId = 'SIM-TCB-' + Math.floor(Math.random() * 900000000 + 100000000);
     const receivedAmount = getPaymentBalance(payment).remainingAmount;
+    const ownerUserId = payment.Student?.userId || null;
+    const ownerUsername = payment.Student?.User?.username || 'system';
     if (receivedAmount <= 0) {
       return res.status(400).json({ message: 'Hóa đơn đã được thanh toán đầy đủ.' });
     }
-    recordReceivedPayment(payment, receivedAmount);
-    payment.paymentMethod = 'Techcombank VietQR (Simulated Auto)';
-    payment.transactionId = transactionId;
-    payment.paidAt = new Date();
-    await payment.save();
+    const applied = await applyPaymentTransaction({
+      paymentId: payment.id,
+      transactionId,
+      amount: receivedAmount,
+      method: 'MBBank VietQR (Simulated Auto)',
+      source: 'test_simulation',
+      receivedAt: new Date()
+    });
+    payment = applied.payment;
 
     await AuditLog.create({
-      userId: payment.Student?.userId || null,
-      username: payment.Student?.User?.username || 'system',
+      userId: ownerUserId,
+      username: ownerUsername,
       action: 'NOP_HOC_PHI_TEST_SIMULATE',
       details: JSON.stringify({ paymentId: payment.id, amount: receivedAmount, transactionId }),
       ipAddress: req.ip || 'Localhost'
@@ -164,6 +183,8 @@ router.post(
         amount: receivedAmount,
         transactionId,
         paidAt: payment.paidAt,
+        status: payment.status,
+        remainingAmount: applied.balance.remainingAmount,
         message: 'Thanh toán học phí xác nhận thành công!'
       });
     }
@@ -184,6 +205,9 @@ async function checkSePayApiForPayment(payment, req) {
   const accountNumber = process.env.SEPAY_ACCOUNT_NUMBER || '0665993159999';
 
   if (!apiToken) return payment;
+
+  const ownerUserId = payment.Student?.userId || null;
+  const ownerUsername = payment.Student?.User?.username || 'system';
 
   try {
     const res = await fetch(`https://my.sepay.vn/userapi/transactions/list?account_number=${accountNumber}&limit=20`, {
@@ -214,9 +238,8 @@ async function checkSePayApiForPayment(payment, req) {
         continue;
       }
 
-      // 2. Kiểm tra số tiền nhận được phải đủ số tiền thực trả
-      const outstanding = getPaymentBalance(payment).remainingAmount;
-      if (amount < outstanding) {
+      // 2. Chỉ xét giao dịch tiền vào có số tiền hợp lệ; thanh toán từng phần được hỗ trợ.
+      if (!Number.isFinite(amount) || amount <= 0) {
         continue;
       }
 
@@ -225,17 +248,31 @@ async function checkSePayApiForPayment(payment, req) {
       const isRefMatched = exactRefRegex.test(content);
 
       if (isIncoming && isRefMatched) {
-        recordReceivedPayment(payment, amount);
-        payment.paymentMethod = 'MBBank VietQR (SePay Direct API)';
-        payment.transactionId = tx.reference_number || tx.referenceCode || tx.id || ('SEPAY-API-' + Date.now());
-        payment.paidAt = txTime ? new Date(txTime) : new Date();
-        await payment.save();
+        const transactionId = tx.reference_number || tx.referenceCode || tx.id;
+        if (!transactionId) continue;
+        const applied = await applyPaymentTransaction({
+          paymentId: payment.id,
+          transactionId,
+          amount,
+          method: 'MBBank VietQR (SePay Direct API)',
+          source: 'sepay_direct_api',
+          receivedAt: txTime ? new Date(txTime) : new Date(),
+          rawPayload: tx
+        });
+        if (applied.duplicate) continue;
+        if (applied.alreadySettled) break;
+        payment = applied.payment;
 
         await AuditLog.create({
-          userId: payment.Student?.userId || null,
-          username: payment.Student?.User?.username || 'system',
+          userId: ownerUserId,
+          username: ownerUsername,
           action: 'NOP_HOC_PHI_SEPAY_API_AUTO',
-          details: JSON.stringify({ paymentId: payment.id, amount, transactionId: payment.transactionId }),
+          details: JSON.stringify({
+            paymentId: payment.id,
+            amount,
+            transactionId,
+            remainingAmount: applied.balance.remainingAmount
+          }),
           ipAddress: req?.ip || 'SePayAPI'
         });
 
@@ -245,14 +282,18 @@ async function checkSePayApiForPayment(payment, req) {
           io.to('student_' + payment.studentId).emit('payment_confirmed', {
             paymentId: payment.id,
             amount,
-            transactionId: payment.transactionId,
+            transactionId,
             paidAt: payment.paidAt,
-            message: 'Thanh toán học phí xác nhận tự động thành công!'
+            status: payment.status,
+            remainingAmount: applied.balance.remainingAmount,
+            message: applied.balance.isSettled
+              ? 'Thanh toán học phí xác nhận tự động thành công!'
+              : 'Đã ghi nhận một phần học phí.'
           });
         }
 
-        console.log('✅ SePay Direct API: Đã tự động gạch nợ HĐ#' + payment.id);
-        break;
+        console.log('✅ SePay Direct API: Đã ghi nhận giao dịch cho HĐ#' + payment.id);
+        if (applied.balance.isSettled) break;
       }
     }
   } catch (err) {
