@@ -1,1 +1,1 @@
-# Nhom_6_N02_DangKyHoc
+# N02_G06_DangKyHoc
